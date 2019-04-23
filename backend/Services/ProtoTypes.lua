@@ -51,6 +51,8 @@ class.CGGAME_PROTO_MAINTYPE_HALL    = 20                        -- hall proto ty
         class.CGGAME_PROTO_BONUS_DAILY  =   1                   -- daily bonus
         class.CGGAME_PROTO_BONUS_SHARE  =   2                   -- bonus for share
     class.CGGAME_PROTO_SUBTYPE_CHAT         =   6               -- chat to user
+    class.CGGAME_PROTO_SUBTYPE_USERINFO     =   7               -- 别人用户信息
+    class.CGGAME_PROTO_SUBTYPE_USERSTATUS   =   8               -- 别人的在线信息
 
 
 class.CGGAME_PROTO_MAINTYPE_CLUB    = 30                        -- 俱乐部
@@ -78,13 +80,10 @@ class.CGGAME_PROTO_MAINTYPE_GAME    = 50                        -- 游戏
         class.CGGAME_MSG_EVENT_CONTINUE        =   7            -- 继续
 
     class.CGGAME_PROTO_SUBTYPE_GIFT         =   4               -- 发送礼物
-    class.CGGAME_PROTO_SUBTYPE_USERINFO     =   5               -- 别人用户信息
-    class.CGGAME_PROTO_SUBTYPE_USERSTATUS   =   6               -- 别人的在线信息
-
-    class.CGGAME_PROTO_SUBTYPE_TABLEMAP     =   7               -- 座位图
-    class.CGGAME_PROTO_SUBTYPE_GAMEINFO     =   8               -- 游戏信息
-    class.CGGAME_PROTO_SUBTYPE_WAITUSER     =   9               -- 等候用户
-    class.CGGAME_PROTO_SUBTYPE_GAMEOVER     =  10               -- 结束信息
+    class.CGGAME_PROTO_SUBTYPE_TABLEMAP     =   5               -- 座位图
+    class.CGGAME_PROTO_SUBTYPE_GAMEINFO     =   6               -- 游戏信息
+    class.CGGAME_PROTO_SUBTYPE_WAITUSER     =   7               -- 等候用户
+    class.CGGAME_PROTO_SUBTYPE_GAMEOVER     =   8               -- 结束信息
 
     class.CGGAME_PROTO_SUBTYPE_SITDOWN      =  11               -- 坐下
     class.CGGAME_PROTO_SUBTYPE_READY        =  12               -- 准备
@@ -96,7 +95,7 @@ class.CGGAME_PROTO_MAINTYPE_GAME    = 50                        -- 游戏
     class.CGGAME_PROTO_SUBTYPE_QUITTABLE    =  17               -- for card/board game
     class.CGGAME_PROTO_SUBTYPE_QUITSTAGE    =  18               -- for strategy game
 
-    -- class.CGGAME_PROTO_SUBTYPE_USER_DEFINE  = 100    -- each game's subtype data start from 100
+    class.CGGAME_PROTO_SUBTYPE_USER_DEFINE  = 100               -- each game's subtype data start from 100
 
 
 ---! 房卡支付
@@ -132,23 +131,24 @@ class.CGGAME_ACL_STATUS_ALREADY					            =   1
 --- 100 ~ 999 for each game
 
 ---- 1000 for common handler
-class.CGGAME_ACL_STATUS_SERVER_BUSY						    =   1000
-class.CGGAME_ACL_STATUS_INVALID_INFO						=   1001
-class.CGGAME_ACL_STATUS_INVALID_COMMAND						=   1002
-class.CGGAME_ACL_STATUS_AUTH_FAILED			                =   1003
-class.CGGAME_ACL_STATUS_COUNTER_FAILED                      =   1004
+class.CGGAME_ACL_STATUS_SERVER_BUSY						    =   1000        -- 服务器繁忙
+class.CGGAME_ACL_STATUS_INVALID_INFO						=   1001        -- 提供的信息有误
+class.CGGAME_ACL_STATUS_INVALID_COMMAND						=   1002        -- 未知或不合法的命令
+class.CGGAME_ACL_STATUS_AUTH_FAILED			                =   1003        -- 授权失败
+class.CGGAME_ACL_STATUS_COUNTER_FAILED                      =   1004        --
 class.CGGAME_ACL_STATUS_SERVER_ERROR						=   1005
 class.CGGAME_ACL_STATUS_SHARE_EXCEED						=   1006
-class.CGGAME_ACL_STATUS_OLDVERSION						    =   1007
+class.CGGAME_ACL_STATUS_OLDVERSION						    =   1007        -- 版本过旧
+class.CGGAME_ACL_STATUS_NODE_OFF						    =   1008        -- 所在服务器的节点即将关闭
 
-class.CGGAME_ACL_STATUS_INVALID_AGENTCODE			        =   1010
+class.CGGAME_ACL_STATUS_INVALID_AGENTCODE			        =   1010        -- 代理号有误
 
-class.CGGAME_ACL_STATUS_ROOM_DB_FAILED					    =   1020
-class.CGGAME_ACL_STATUS_ROOM_CREATE_FAILED					=   1021
-class.CGGAME_ACL_STATUS_ROOM_FIND_FAILED					=   1022
-class.CGGAME_ACL_STATUS_ROOM_JOIN_FULL						=   1023
-class.CGGAME_ACL_STATUS_ROOM_NOT_SUPPORT					=   1024
-class.CGGAME_ACL_STATUS_ROOM_NO_SUCH_PAYTYPE                =   1025
+class.CGGAME_ACL_STATUS_ROOM_DB_FAILED					    =   1020        -- 房间创建时数据库有误
+class.CGGAME_ACL_STATUS_ROOM_CREATE_FAILED					=   1021        -- 房间创建失败
+class.CGGAME_ACL_STATUS_ROOM_FIND_FAILED					=   1022        -- 找不到房间号
+class.CGGAME_ACL_STATUS_ROOM_JOIN_FULL						=   1023        -- 房间已满，无法加入
+class.CGGAME_ACL_STATUS_ROOM_NOT_SUPPORT					=   1024        -- 尚不支持房号功能
+class.CGGAME_ACL_STATUS_ROOM_NO_SUCH_PAYTYPE                =   1025        -- 支付方式不支持
 
 
 class.isACLSuccess = function (status)

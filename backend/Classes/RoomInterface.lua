@@ -1,7 +1,8 @@
 local skynet        = skynet or require "skynet"
-local cluster       = require "skynet.cluster"
 
-local clusterHelper = require "ClusterHelper"
+-- use skynet.init to determine server or client
+local cluster       = skynet.init and require "skynet.cluster"
+local clsHelper     = skynet.init and require "ClusterHelper"
 
 local prioQueue     = require "PriorityQueue"
 local protoTypes    = require "ProtoTypes"
@@ -97,30 +98,8 @@ class.CollectUserStatus = function (self, user)
 
     local data   = packetHelper:encodeMsg(gameClass.UserStatus_ProtoName, info)
     local packet = packetHelper:makeProtoData(protoTypes.CGGAME_PROTO_MAINTYPE_HALL,
-                        protoTypes.CGGAME_PROTO_SUBTYPE_MYSTATUS, data)
+                        protoTypes.CGGAME_PROTO_SUBTYPE_USERSTATUS, data)
     return packet
-end
-
----! 日志记录 屏蔽维语藏语
-class.FilterText = function (self, chatInfo)
-    local ForbiddenTxt = require "ForbiddenTxt"
-    chatInfo.chatText = ForbiddenTxt.purify(chatInfo.chatText)
-
-    debugHelper.cclog("[%s:%s]%s", chatInfo.speekerId, chatInfo.speakerNick, chatInfo.chatText)
-
-    local text = ""
-    local flag = true
-    for p, c in utf8.codes(chatInfo.chatText) do
-        if c > 256 and c < 8192 then
-            text = text .. " "
-        else
-            text = text .. utf8.char(c)
-        end
-    end
-    if flag then
-        chatInfo.chatText = text
-        return packetHelper:encodeMsg("CGGame.ChatInfo", chatInfo)
-    end
 end
 
 ---! 恢复之前的桌子
@@ -164,7 +143,7 @@ end
 ---! @param
 ---! is player sit down or not? make it sit down anyway
 class.PlayerContinue = function(self, player)
-    if cluster then
+    if skynet.init then
         self:remoteDelAppGameUser(player)
     end
 
@@ -198,7 +177,7 @@ class.PlayerBreak = function(self, player)
         player.is_offline = true
         if table then
             table:BroadcastMessage(protoTypes.CGGAME_MSG_EVENT_BREAK, player.seatId, player.FUserCode)
-            if cluster then
+            if skynet.init then
                 self:remoteAddAppGameUser(player)
             end
         end
@@ -208,7 +187,7 @@ class.PlayerBreak = function(self, player)
     player.FTotalTime = (player.FTotalTime or 0) + delay
 
     local keyName = "FUserCode"
-    self:remoteUpdateDB(class.DBTableName, keyName, player[keyName], "FTotalTime", player.FTotalTime)
+    self:remoteUpdateDB(self.config.DBTableName, keyName, player[keyName], "FTotalTime", player.FTotalTime)
 
     local fields = {
         "appName", "agent", "gate", "client_fd", "address", "watchdog",
@@ -269,46 +248,60 @@ class.updateTableTimeout = function (self, table, newTimeout)
     self.eventTables:addObject(table)
 end
 
-class.handleClubData = function (self, player, gameType, data)
-    print("handle club data", player, gameType, data)
+---! @brief 发送用户包
+class.SendUserPacket = function (self, fromCode, packet, sendFunc)
+    if user.tableId then
+        local table = self.allTables[user.tableId]
+
+        if table then
+            table:groupAction("playerUsers", function (seatId, code)
+                sendFunc(self, packet, code)
+            end)
+            table:groupAction("standbyUsers", function (seatId, code)
+                sendFunc(self, packet, code)
+            end)
+            return
+        end
+    end
+
+    sendFunc(self, packet, fromCode)
+end
+
+class.handleClubData = function (self, player, clubType, data)
+    print("handle club data", player, clubType, data)
     return true
 end
 
-class.handleRoomData = function (self, player, gameType, data)
-    print("handle room data", player, gameType, data)
-
+class.handleRoomData = function (self, player, roomType, data)
     local roomInfo = nil
-    if gameType == protoTypes.CGGAME_PROTO_SUBTYPE_ROOM_RELEASE  then
+    if roomType == protoTypes.CGGAME_PROTO_SUBTYPE_RELEASE  then
         roomInfo = packetHelper:decodeMsg("CGGame.ExitInfo", data)
     else
         roomInfo = packetHelper:decodeMsg("CGGame.RoomInfo", data)
     end
+
     if not roomInfo then
         self:SendACLToUser(protoTypes.CGGAME_ACL_STATUS_UNKNOWN_COMMAND, player.FUserCode)
         return
     end
 
-    local player = self:getUserInfo(roomInfo.ownerId, true)
-    if not player then
+    if player.FUserCode ~= roomInfo.ownerCode then
         self:SendACLToUser(protoTypes.CGGAME_ACL_STATUS_INVALID_USERINFO, player.FUserCode)
         return
     end
 
-    local ret
-    if data.subType == protoTypes.CGGAME_PROTO_SUBTYPE_ROOM_CREATE  then
-        ret = self:CreateRoom(player, roomInfo)
-    elseif data.subType == protoTypes.CGGAME_PROTO_SUBTYPE_ROOM_JOIN  then
-        ret = self:JoinRoom(player, roomInfo)
-    elseif data.subType == protoTypes.CGGAME_PROTO_SUBTYPE_ROOM_RELEASE  then
-        ret = self:ReleaseRoom(player, roomInfo)
-    elseif data.subType == protoTypes.CGGAME_PROTO_SUBTYPE_ROOM_RESULT_ALL then
-        ret = self:ResultRoom(player, roomInfo)
+    if roomType == protoTypes.CGGAME_PROTO_SUBTYPE_CREATE then
+        self:CreateRoom(player, roomInfo)
+    elseif roomType == protoTypes.CGGAME_PROTO_SUBTYPE_JOIN then
+        self:JoinRoom(player, roomInfo)
+    elseif roomType == protoTypes.CGGAME_PROTO_SUBTYPE_RELEASE then
+        self:ReleaseRoom(player, roomInfo)
+    elseif roomType == protoTypes.CGGAME_PROTO_SUBTYPE_RESULT_ALL then
+        self:ResultRoom(player, roomInfo)
     else
-        debugHelper.cclog("unknown handleRoomData", data.subType)
+        debugHelper.cclog("unknown handleRoomData", roomType)
         self:SendACLToUser(protoTypes.CGGAME_ACL_STATUS_UNKNOWN_COMMAND, player.FUserCode)
     end
-
-    return ret
 end
 
 ---! Room Tables
@@ -319,11 +312,11 @@ class.createRoomDBInfo = function (self, player)
     repeat
         local roomId = math.random(protoTypes.CGGAME_ROOM_TABLE_MINID, protoTypes.CGGAME_ROOM_TABLE_MAXID)
         info = self:remoteLoadDB(tabName, keyName, roomId)
-    until info.FOwnerID == ""
+    until info.FOwnerCode == 0
 
-    local fldName = "FOwnerID"
-    info[fldName] = player.FUserCode
-    self:remoteUpdateDB(tabName, keyName, info.FRoomID, fldName, info[fldName])
+    local field = "FOwnerCode"
+    info[field] = player.FUserCode
+    self:remoteUpdateDB(tabName, keyName, info.FRoomID, field, info[field])
     return info
 end
 
@@ -352,7 +345,7 @@ class.releaseRoomTable = function (self, table)
     local tabName = "TRoomInfo"
     local keyName = "FRoomID"
     local info = self:remoteLoadDB(tabName, keyName, table.tableId)
-    self:updateLoadDB(tabName, keyName, table.tableId, "FGameCount", count)
+    self:remoteUpdateDB(tabName, keyName, table.tableId, "FGameCount", count)
 end
 
 ---! 找到待付款人
@@ -375,7 +368,7 @@ class.findChargePlayers = function (self, table)
         return
     end
 
-    local creator   = roomInfo.FOwnerID
+    local creator   = roomInfo.FOwnerCode
     local winners   = {}
     local winuser   = nil
     local players   = {}
@@ -423,7 +416,7 @@ end
 ---! 房卡场付款
 class.roomTablePayBill = function (self, table, forced)
     local roomInfo = table.roomInfo
-    if not cluster or not roomInfo or roomInfo.isPayed then
+    if not skynet.init or not roomInfo or roomInfo.isPayed then
         return
     end
 
@@ -492,13 +485,13 @@ class.getRoomPacket = function (self, table)
     info.roomId         = roomInfo.FRoomID
     info.expireTime     = table.expireTime
     info.openTime       = table.openTime
-    info.ownerId        = roomInfo.FOwnerID
+    info.ownerCode      = roomInfo.FOwnerCode
     info.ownerName      = roomInfo.FOwnerName
     info.roomDetails    = roomInfo.packDetails
 
     local data = packetHelper:encodeMsg("CGGame.RoomInfo", info)
-    local packet = packetHelper:makeProtoData(protoTypes.CGGAME_PROTO_TYPE_ROOMDATA,
-                        protoTypes.CGGAME_PROTO_SUBTYPE_ROOM_INFO, data)
+    local packet = packetHelper:makeProtoData(protoTypes.CGGAME_PROTO_MAINTYPE_ROOM,
+                        protoTypes.CGGAME_PROTO_SUBTYPE_INFO, data)
     return packet
 end
 
@@ -541,7 +534,7 @@ class.CreateRoom = function (self, player, roomInfo)
     end
 
     local packet = self:getRoomPacket(table)
-    self:sendPacketToUser(packet, player.FUserCode)
+    self:hallPacketToUser(packet, player.FUserCode)
 end
 
 ---! 加入房间
@@ -574,7 +567,7 @@ class.JoinRoom = function (self, player, roomInfo)
     end
 
     local packet = self:getRoomPacket(table)
-    self:sendPacketToUser(packet, player.FUserCode)
+    self:hallPacketToUser(packet, player.FUserCode)
 end
 
 ---! 更新退出投票
@@ -631,7 +624,7 @@ class.sendExitInfo = function (self, table, seatId, exit)
         local exitInfo  = roomInfo.exitInfo
         info.roomId     = exitInfo.roomId
         info.mask       = exitInfo.mask
-        info.ownerId    = exitInfo.ownerId
+        info.ownerCode  = exitInfo.ownerCode
         info.timeout    = exitInfo.timeout - os.time()
         if info.timeout < 0 then
             info.timeout = 0
@@ -643,7 +636,8 @@ class.sendExitInfo = function (self, table, seatId, exit)
     end
 
     local data = packetHelper:encodeMsg("CGGame.ExitInfo", info)
-    table:SendDataToTable(protoTypes.CGGAME_PROTO_MAINTYPE_ROOM, protoTypes.CGGAME_PROTO_SUBTYPE_ROOM_RELEASE, data)
+    local packet = packetHelper:makeProtoData(protoTypes.CGGAME_PROTO_MAINTYPE_ROOM, protoTypes.CGGAME_PROTO_SUBTYPE_RELEASE, data)
+    table:sendPacketToTable(packet)
     return exit
 end
 
@@ -656,7 +650,7 @@ class.ReleaseRoom = function (self, player, exitInfo)
     end
 
     -- when request
-    -- gameCount == agree or not, ownerId = who
+    -- gameCount == agree or not, ownerCode = who
     local table = self.allTables[exitInfo.roomId]
     if not table or player.seatId ~= exitInfo.seatId then
         self:SendACLToUser(protoTypes.CGGAME_ACL_STATUS_INVALID_INFO, player.FUserCode)
@@ -700,6 +694,11 @@ end
 ---! @param gameType      游戏协议
 ---! @param data          数据
 class.handleGameData = function (self, player, gameType, data)
+    local user = player and self:getUserInfo(player.FUserCode)
+    if user then
+        player = user
+    end
+
     if gameType == protoTypes.CGGAME_PROTO_SUBTYPE_SITDOWN then
         local seatInfo = self:parseSeatInfo(player, data)
         self:SitDown(player, seatInfo)
@@ -716,14 +715,7 @@ class.handleGameData = function (self, player, gameType, data)
     elseif gameType == protoTypes.CGGAME_PROTO_SUBTYPE_STANDBY then
         self:PlayerStandBy(player)
     elseif gameType == protoTypes.CGGAME_PROTO_SUBTYPE_CHANGETABLE  then
-        local seatInfo = self:parseSeatInfo(player, data)
-        self:ChangeTable(player, seatInfo)
-    elseif gameType == protoTypes.CGGAME_PROTO_SUBTYPE_USERINFO then
-        local info = packetHelper:decodeMsg("CGGame.HallInfo", data)
-        self:SendUserInfo(player.FUserCode, info.FUserCode)
-    elseif gameType == protoTypes.CGGAME_PROTO_SUBTYPE_USERSTATUS then
-        local info = packetHelper:decodeMsg("CGGame.HallInfo", data)
-        self:SendUserStatus(player.FUserCode, info.FUserCode)
+        self:ChangeTable(player, data)
     elseif gameType == protoTypes.CGGAME_PROTO_SUBTYPE_GIFT then
         self:SendUserGift(player.FUserCode, data)
     elseif player.tableId then
@@ -815,7 +807,7 @@ class.sitDownRoomTable = function (self, player, table, seatId)
     end
 
     local packet = self:getRoomPacket(table)
-    self:sendPacketToUser(packet, player.FUserCode)
+    self:gamePacketToUser(packet, player.FUserCode)
 
     self:SeatPlayer(player, table, seatId)
     return true
@@ -859,7 +851,7 @@ end
 
 ---! 解析数据
 class.parseSeatInfo = function (self, player, data)
-    local seatInfo = packetHelper:decodeMsg("CGGame.SeatInfo", data)
+    local seatInfo = packetHelper:decodeMsg("CGGame.SeatInfo", data or "")
     seatInfo = tabHelper.cloneTable(seatInfo)
     if not seatInfo.roomId or seatInfo.roomId <= 0 or not self.allTables[seatInfo.roomId] then
         seatInfo.roomId = nil
@@ -885,7 +877,7 @@ class.parseSeatInfo = function (self, player, data)
         local oldTableId = player.oldTableId or -1
         local table = self:getEmptyTable(seatInfo.seatId, oldTableId)
         seatInfo.roomId = table.tableId
-        seatInfo.seatId = table:FindOneEmptySeat()
+        seatInfo.seatId = seatInfo.seatId or table:FindOneEmptySeat()
     end
     return seatInfo
 end
@@ -895,7 +887,6 @@ end
 ---! @return true       玩家已经在桌子上了，可能是Sitdown, Ready, Standup, Play中的任意状态
 ---! @return nil        没有成功坐上桌子, player.tableId, player.seatId 无意义
 class.SitDown = function(self, player, seatInfo)
-    skynet.error("try to sitdown", player, seatInfo, seatInfo.tableId, seatInfo.seatId)
     if seatInfo.roomId ~= player.tableId or seatInfo.seatId ~= player.seatId then
         if player.tableId and not self:QuitTable(player, true) then
             -- print("player can't quit")
@@ -1038,9 +1029,10 @@ class.QuitTable = function(self, player, force)
 end
 
 ---! @brief 玩家换桌
-class.ChangeTable = function (self, player, seatInfo)
+class.ChangeTable = function (self, player, data)
     player.oldTableId = player.tableId
     if self:QuitTable(player) then
+        local seatInfo = self:parseSeatInfo(player, data)
         self:SitDown(player, seatInfo)
         if self.config.AutoReady then
             self:PlayerReady(player)

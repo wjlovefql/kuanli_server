@@ -315,7 +315,7 @@ end
 
 ---! @brief 发送数据到用户
 class.sendPacketToUser = function (self, packet, code)
-    self.room:sendPacketToUser(packet, code)
+    self.room:sendPacketToUser(packet, code, 1)
 end
 
 ---! 发送acl信息给整个桌子的用户
@@ -348,9 +348,10 @@ class.SendTableMap = function (self, fieldName, seatId, userCode)
     end)
 
     local myCode = self.playerUsers:getObjectAt(seatId)
-    if not myCode or not self.standbyUsers:hasObject(userCode) then
+    if not myCode and not self.standbyUsers:hasObject(userCode) then
         return
     end
+    myCode = myCode or userCode
     local packet = packetHelper:encodeMsg("CGGame.TableMapInfo", map)
     self:SendGameDataToUser(myCode, protoTypes.CGGAME_PROTO_SUBTYPE_TABLEMAP, packet)
 end
@@ -395,7 +396,7 @@ class.SendGameWait = function(self, mask, newStatus, newTimeout)
 
     local wait = {
         tableStatus = newStatus,
-        timeout     = newTimeout,
+        timeout     = math.ceil(newTimeout),
         waitMask    = mask,
     }
 
@@ -537,8 +538,6 @@ class.CheckGameStart = function (self)
     if self.status ~= protoTypes.CGGAME_TABLE_STATUS_WAITREADY then
         return
     end
-
-    print("check game start")
 
     if self.roomInfo and self.roomInfo.histInfo and self.roomInfo.histInfo.gameOver then
         skynet.error("Can't start released table", self.tableId)
@@ -778,7 +777,7 @@ class.SendRoomTableResult = function (self, allOver)
     histInfo.gameOver   = allOver
 
     local data = tabHelper.encode(histInfo) or ""
-    self:sendMultiRoomData(nil, protoTypes.CGGAME_PROTO_SUBTYPE_ROOM_RESULT, data)
+    self:sendMultiRoomData(nil, protoTypes.CGGAME_PROTO_SUBTYPE_RESULT, data)
 
     local allHistInfo = self.roomInfo.allHistInfo
     if allHistInfo then
@@ -810,7 +809,7 @@ class.SendRoomTableResultAll = function (self, code)
     local allHistInfo = self.roomInfo.allHistInfo
     if allHistInfo then
         local data = tabHelper.encode(allHistInfo) or ""
-        self:sendMultiRoomData(code, protoTypes.CGGAME_PROTO_SUBTYPE_ROOM_RESULT_ALL, data)
+        self:sendMultiRoomData(code, protoTypes.CGGAME_PROTO_SUBTYPE_RESULT_ALL, data)
     end
 end
 

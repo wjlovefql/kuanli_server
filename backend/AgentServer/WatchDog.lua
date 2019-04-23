@@ -19,6 +19,8 @@ local myInfo = nil
 local nodeInfo = nil
 ---! gateserver's gate service
 local gate  = nil
+local web_sock_id = nil
+
 ---! all agents
 local tcpAgents = NumSet.create()
 local webAgents = NumSet.create()
@@ -115,8 +117,15 @@ function CMD.closeAgent(fd)
 end
 
 ---! @brief place holder, we may use it later
-function CMD.noticeAllAgents(msg)
-    skynet.error("watchdog get notice", msg)
+function CMD.noticeAll (msg)
+    webAgents:forEach(function (info)
+        pcall(skynet.send, info.agent, "lua", "sendProtocolPacket", msg)
+    end)
+
+    tcpAgents:forEach(function (info)
+        pcall(skynet.send, info.agent, "lua", "sendProtocolPacket", msg)
+    end)
+
     return 0
 end
 
@@ -128,8 +137,23 @@ function CMD.getStat ()
     return stat
 end
 
-function CMD.nodeOff ()
-    print("TODO: get node off")
+function CMD.gateOff ()
+    if gate then
+        xpcall(function ()
+            skynet.call(gate, "lua", "close")
+        end,
+        function (err)
+            print("gateOff -> close gate: error is ", err)
+        end)
+    end
+    if web_sock_id then
+        xpcall(function ()
+            socket.close(web_sock_id)
+        end,
+        function (err)
+            print("gateOff -> close web: error is ", err)
+        end)
+    end
 end
 
 ---! 注册LoginWatchDog的处理函数，一种是skynet服务，一种是socket
@@ -204,6 +228,7 @@ local function startWatch ()
     -- web tunnel, 监听 8300 + serverIndex
     local address = string.format("%s:%d", publicAddr, myInfo.webPort)
     local id = assert(socket.listen(address))
+    web_sock_id = id
     socket.start(id , function(id, addr)
         socket.start(id)
         xpcall(function ()

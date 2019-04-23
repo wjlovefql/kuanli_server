@@ -93,6 +93,16 @@ class.sendHeartBeat = function (self)
     self.cmd.sendProtocolPacket(packet)
 end
 
+class.sendACL = function(self, aclType)
+    local aclInfo = {
+        aclType = aclType,
+    }
+    local data = packetHelper:encodeMsg("CGGame.AclInfo", aclInfo)
+    local packet = packetHelper:makeProtoData(protoTypes.CGGAME_PROTO_MAINTYPE_BASIC,
+                        protoTypes.CGGAME_PROTO_SUBTYPE_ACL, data)
+    self.cmd.sendProtocolPacket(packet)
+end
+
 ---! close the agent
 class.kickMe = function (self, fd)
     fd = fd or self.agentInfo.client_fd
@@ -172,7 +182,6 @@ class.authSendChallenge = function (self)
 
     local ret = {}
     ret.challenge = self.authInfo.challenge
-    print("send challenge", crypt.hexencode(ret.challenge))
     local data = packetHelper:encodeMsg("CGGame.AuthInfo", ret)
     local packet = packetHelper:makeProtoData(protoTypes.CGGAME_PROTO_MAINTYPE_AUTH,
                         protoTypes.CGGAME_PROTO_SUBTYPE_CHALLENGE, data)
@@ -199,8 +208,8 @@ class.authCheckHmac = function (self, info)
 
     local ret = {}
     ret.playerId  = info.playerId
-    ret.authIndex = auth.authIndex
-    local data = packetHelper:encodeMsg("CGGame.AuthInfo", ret)
+    ret.authIndex = math.floor(auth.authIndex + 0.01)
+    local data = ret.playerId .. ";" .. ret.authIndex
     ret.hmac   = crypt.hmac64(crypt.hashkey(auth.challenge .. data), auth.secret)
     if ret.hmac ~= info.hmac then
         self:authSendFail(string.format("Wrong HMac : %s %s", crypt.hexencode(ret.hmac), crypt.hexencode(info.hmac)))
@@ -276,7 +285,6 @@ class.authExchangeKeys = function (self, info)
 
     local ret = {}
     ret.serverkey = crypt.dhexchange(key)
-    print("send serverkey", crypt.hexencode(key), "exchanged:", crypt.hexencode(ret.serverkey))
     local data = packetHelper:encodeMsg("CGGame.AuthInfo", ret)
     local packet = packetHelper:makeProtoData(protoTypes.CGGAME_PROTO_MAINTYPE_AUTH,
                         protoTypes.CGGAME_PROTO_SUBTYPE_SERVERKEY, data)
@@ -308,20 +316,17 @@ class.hallReqQuit = function (self, data)
     end
     local flg, ret = pcall(cluster.call, self.connApp, self.connAddr, "agentQuit",
                             self.agentInfo.FUserCode, self.agentInfo.agentSign)
-    print("agent quit returns", flg, ret)
     if not flg or not ret then
         self:kickMe()
     end
 end
 
-class.sendJoinInfo = function (self, joinType)
-    print("sendJoinInfo", self.agentInfo.FUserCode, type(self.agentInfo.FUserCode))
+class.sendJoinInfo = function (self, mainType, joinType)
     local info = {}
     info.appName = self.connApp
     info.FUserCode = self.agentInfo.FUserCode
     local data = packetHelper:encodeMsg("CGGame.HallInfo", info)
-    local packet = packetHelper:makeProtoData(protoTypes.CGGAME_PROTO_MAINTYPE_HALL,
-                        joinType, data)
+    local packet = packetHelper:makeProtoData(mainType, joinType, data)
     self.cmd.sendProtocolPacket(packet)
 end
 
@@ -332,14 +337,12 @@ class.handleJoin = function (self, cmd, data)
     end
 
     local app, addr = clsHelper.getMainAppAddr(clsHelper.kMainInfo)
-    print("hall req join, mainNode mainInfo is", app, addr)
     if not app or not addr then
         return
     end
 
     local info = packetHelper:decodeMsg("CGGame.HallInfo", data)
     local flg, all = pcall(cluster.call, app, addr, "getHallList", self.agentInfo.FUniqueID, info)
-    print("getHallList returns, flg, all, first", flg, all, all[1])
     if not flg or #all <= 0 then
         return
     end
@@ -355,7 +358,7 @@ class.handleJoin = function (self, cmd, data)
         print("failed to ", cmd, app, addr)
         return
     end
-    print("succeed to ", cmd, app, addr, "FUserCode", ret)
+
     self.connApp = app
     self.connAddr = addr
     self.agentInfo.FUserCode = ret
@@ -365,11 +368,12 @@ end
 ---! request to join hall
 class.hallReqJoin = function (self, data)
     if not self:handleJoin("joinHall", data) then
+        self:sendACL(protoTypes.CGGAME_ACL_STATUS_SERVER_BUSY)
         return
     end
 
     self.apiLevel = class.API_LEVEL_HALL
-    self:sendJoinInfo(protoTypes.CGGAME_PROTO_SUBTYPE_HALLJOIN)
+    self:sendJoinInfo(protoTypes.CGGAME_PROTO_MAINTYPE_HALL, protoTypes.CGGAME_PROTO_SUBTYPE_HALLJOIN)
 end
 
 ---! request to set user info
@@ -379,7 +383,6 @@ class.hallRemoteData = function (self, subType, data)
     end
     local flg, ret = pcall(cluster.call, self.connApp, self.connAddr, "hallData",
                         self.agentInfo.FUserCode, self.agentInfo.agentSign, subType, data)
-    print("hall remote data returns", flg, ret)
     if not flg or not ret then
         self:kickMe()
     end
@@ -398,6 +401,8 @@ class.handle_hall = function (self, args)
         self:hallReqJoin(args.msgBody)
     elseif args.subType == protoTypes.CGGAME_PROTO_SUBTYPE_MYINFO
         or args.subType == protoTypes.CGGAME_PROTO_SUBTYPE_MYSTATUS
+        or args.subType == protoTypes.CGGAME_PROTO_SUBTYPE_USERINFO
+        or args.subType == protoTypes.CGGAME_PROTO_SUBTYPE_USERSTATUS
         or args.subType == protoTypes.CGGAME_PROTO_SUBTYPE_BONUS
         or args.subType == protoTypes.CGGAME_PROTO_SUBTYPE_CHAT then
         self:hallRemoteData(args.subType, args.msgBody)
@@ -438,22 +443,20 @@ class.handle_room = function (self, args)
     end
     local flg, ret = pcall(cluster.call, self.connApp, self.connAddr, "roomData",
                         self.agentInfo.FUserCode, self.agentInfo.agentSign, args.subType, args.msgBody)
-    print("room remote data returns", flg, ret)
     if not flg or not ret then
         self:kickMe()
     end
-
-    skynet.error("unhandled room", args.mainType, args.subType, args.msgBody)
 end
 
 ---! request to join hall
 class.gameReqJoin = function (self, data)
     if not self:handleJoin("joinGame", data) then
+        self:sendACL(protoTypes.CGGAME_ACL_STATUS_SERVER_BUSY)
         return
     end
 
     self.apiLevel = class.API_LEVEL_GAME
-    self:sendJoinInfo(protoTypes.CGGAME_PROTO_SUBTYPE_GAMEJOIN)
+    self:sendJoinInfo(protoTypes.CGGAME_PROTO_MAINTYPE_GAME, protoTypes.CGGAME_PROTO_SUBTYPE_GAMEJOIN)
 end
 
 ---! request to set user info
@@ -463,7 +466,6 @@ class.gameRemoteData = function (self, subType, data)
     end
     local flg, ret = pcall(cluster.call, self.connApp, self.connAddr, "gameData",
                         self.agentInfo.FUserCode, self.agentInfo.agentSign, subType, data)
-    print("game remote data returns", flg, ret)
     if not flg or not ret then
         self:kickMe()
     end
@@ -479,6 +481,8 @@ class.handle_game = function (self, args)
     if args.subType == protoTypes.CGGAME_PROTO_SUBTYPE_GAMEJOIN then
         self:gameReqJoin(args.msgBody)
     elseif args.subType <= protoTypes.CGGAME_PROTO_SUBTYPE_QUITSTAGE then
+        self:gameRemoteData(args.subType, args.msgBody)
+    elseif args.subType >= protoTypes.CGGAME_PROTO_SUBTYPE_USER_DEFINE then
         self:gameRemoteData(args.subType, args.msgBody)
     else
         skynet.error("unhandled game", args.mainType, args.subType, args.msgBody)

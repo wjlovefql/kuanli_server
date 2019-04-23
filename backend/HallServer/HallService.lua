@@ -12,6 +12,7 @@ local packetHelper  = (require "PacketHelper").create("protos/CGGame.pb")
 
 ---! hall interface
 local hallInterface = nil
+local nodeInfo = nil
 
 local function getValidPlayer(code, sign)
     local player = hallInterface.onlineUsers:getObject(code)
@@ -40,7 +41,6 @@ function CMD.agentQuit (code, sign)
 end
 
 function CMD.joinHall (agentInfo)
-    print("joinHall")
     agentInfo.apiLevel = 0
     local userCode = hallInterface:addPlayer(agentInfo)
     hallInterface:SendHallText(userCode)
@@ -57,7 +57,6 @@ function CMD.joinGame (agentInfo)
     agentInfo.apiLevel = 1
     local userCode = hallInterface:addPlayer(agentInfo)
     hallInterface:SendGameText(userCode)
-    print("joinGame", userCode)
     return userCode
 end
 
@@ -84,9 +83,16 @@ function CMD.logStat ()
     return 0
 end
 
-function CMD.nodeOff ()
-    print ("TODO: get node off")
-    return 0
+function CMD.noticeAll (msg)
+    if not hallInterface then
+        return 0
+    end
+
+    hallInterface.onlineUsers:forEach(function (player)
+        hallInterface:sendPacketToUser(msg, player.FUserCode)
+    end)
+
+    return 1
 end
 
 local function game_loop()
@@ -94,6 +100,16 @@ local function game_loop()
         skynet.timeout(hallInterface.tickInterval, game_loop)
         xpcall( function()
             hallInterface:tick(hallInterface.tickInterval/100)
+
+            local cnt = hallInterface.onlineUsers:getCount()
+            local bn  = hallInterface.config.BotNum or 0
+            cnt = cnt - bn
+            skynet.call(nodeInfo, "lua", "updateConfig", cnt, "nodeInfo", "numPlayers")
+
+            local ret, nodeLink = pcall(skynet.call, nodeInfo, "lua", "getServiceAddr", clsHelper.kNodeLink)
+            if ret and nodeLink ~= "" then
+                pcall(skynet.send, nodeLink, "lua", "heartBeat", cnt)
+            end
         end,
         function(err)
             skynet.error(err)
@@ -119,7 +135,7 @@ skynet.start(function()
     end)
 
     ---! 获得NodeInfo 服务 注册自己
-    local nodeInfo = skynet.uniqueservice(clsHelper.kNodeInfo)
+    nodeInfo = skynet.uniqueservice(clsHelper.kNodeInfo)
     skynet.call(nodeInfo, "lua", "updateConfig", skynet.self(), clsHelper.kHallService)
 
     ---! 游戏循环
